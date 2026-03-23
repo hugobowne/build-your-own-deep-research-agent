@@ -1,5 +1,5 @@
 """
-Final workshop agent with todo verification hooks and tracing spans.
+Final workshop agent with todo verification hooks, tracing spans, and Textual Shell UI.
 """
 
 from dataclasses import dataclass, field
@@ -11,9 +11,9 @@ from typing import Any, Callable, Literal, TypeAlias, overload
 import os
 import logfire
 import subprocess
-from rich.console import Console
-from rich.markdown import Markdown
 from rich.text import Text
+
+# Import your shell
 from shell import Shell
 
 os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
@@ -25,7 +25,7 @@ logfire.instrument_google_genai()
 @dataclass(slots=True)
 class AgentRunState:
     iteration_count: int = 0
-    max_iterations: int = 10
+    max_iterations: int = 30
     todos: list[str] = field(default_factory=list)
 
     def increment_turn(self) -> None:
@@ -38,18 +38,30 @@ class AgentRunState:
     def should_disable_tools(self) -> bool:
         return self.hit_iteration_limit()
 
-    def add_todo(self, todo: str) -> None:
-        todo = todo.strip()
-        if todo and todo not in self.todos:
-            self.todos.append(todo)
+    def add_todos(self, todos: list[str]) -> list[str]:
+        added = []
+        for todo in todos:
+            todo = todo.strip()
+            if todo and todo not in self.todos:
+                self.todos.append(todo)
+                added.append(todo)
+        return added
 
-    def remove_todo(self, todo: str) -> bool:
-        todo = todo.strip().lower()
-        for existing in list(self.todos):
-            if existing.lower() == todo:
-                self.todos.remove(existing)
-                return True
-        return False
+    def remove_todos(self, todos: list[str]) -> tuple[list[str], list[str]]:
+        removed = []
+        not_found = []
+        for todo in todos:
+            todo_lower = todo.strip().lower()
+            found = False
+            for existing in list(self.todos):
+                if existing.lower() == todo_lower:
+                    self.todos.remove(existing)
+                    removed.append(existing)
+                    found = True
+                    break
+            if not found:
+                not_found.append(todo.strip())
+        return removed, not_found
 
 
 class ToolResult(BaseModel):
@@ -191,29 +203,29 @@ class Bash(AgentTool):
 
 class ModifyTodo(AgentTool):
     """
-    Add or remove a todo from the agent run state.
+    Add or remove todos from the agent run state. Supports multiple todos at once.
     """
 
     type: Literal["add", "remove"]
-    todo: str
+    todos: list[str]
 
     def execute(self, function_id: str, run_state: AgentRunState) -> ToolResult:
         if self.type == "add":
-            run_state.add_todo(self.todo)
+            added = run_state.add_todos(self.todos)
             return self.tool_result(
                 error=False,
                 function_id=function_id,
-                response={"action": "add", "todo": self.todo, "todos": run_state.todos},
+                response={"action": "add", "added": added, "todos": run_state.todos},
             )
 
-        removed = run_state.remove_todo(self.todo)
+        removed, not_found = run_state.remove_todos(self.todos)
         return self.tool_result(
-            error=not removed,
+            error=len(not_found) > 0,
             function_id=function_id,
             response={
                 "action": "remove",
-                "todo": self.todo,
                 "removed": removed,
+                "not_found": not_found,
                 "todos": run_state.todos,
             },
         )
@@ -225,6 +237,8 @@ You are Koroku, a coding agent built by Ivan.
 Be polite, positive and helpful where you can.
 Use modifyTodo to keep an explicit todo list of the work you still need to finish.
 Remove todos when they are completed.
+
+You must create a todo before embarking on any task
 """
 
 FINAL_MESSAGE_REMINDER = """
@@ -233,8 +247,6 @@ Before finishing, make sure all todos are completed and removed.
 If there are remaining todos, continue the turn until they are all cleared.
 """
 
-console = Console()
-
 
 def format_tool_call(call: types.FunctionCall) -> str:
     if call.name == "readFile" and call.args and call.args.get("path"):
@@ -242,31 +254,9 @@ def format_tool_call(call: types.FunctionCall) -> str:
     if call.name == "bash" and call.args and call.args.get("command"):
         return f"$ {call.args['command']}"
     if call.name == "modifyTodo" and call.args:
-        return f"Todo {call.args.get('type')}: {call.args.get('todo')}"
+        todos = call.args.get("todos", [])
+        return f"Todo {call.args.get('type')}: {', '.join(todos)}"
     return f"{call.name}: {call.args or {}}"
-
-
-def render_text_response(text: str) -> None:
-    text = text.strip()
-    if not text:
-        return
-
-    if "```" in text or text.startswith("#") or "\n# " in text:
-        console.print(Markdown(text))
-        return
-
-    console.print(Text(f"* {text}", style="white"))
-
-
-def render_todo_change(action: str, todo: str) -> None:
-    console.print(Text("  todos list", style="bold cyan"))
-    if action == "add":
-        console.print(Text(f"  + [ ] {todo}", style="cyan"))
-        return
-
-    line = Text("  - [ ] ", style="dim cyan")
-    line.append(todo, style="strike dim")
-    console.print(line)
 
 
 def format_todos(todos: list[str]) -> str:
@@ -357,7 +347,10 @@ class BaseAgent(ABC):
         raise NotImplementedError
 
     def get_config(self, run_state: AgentRunState) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(tools=self.get_tools(run_state))
+        return types.GenerateContentConfig(
+            tools=self.get_tools(run_state),
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+        )
 
     def execute_tool(
         self, tool_name: str, args: dict[str, Any], function_id: str
@@ -382,7 +375,7 @@ class BaseAgent(ABC):
                 response={"error": str(e)},
             )
 
-    def run_until_idle(self, contents: list[types.Content]) -> list[types.Part]:
+    async def run_until_idle(self, contents: list[types.Content]) -> list[types.Part]:
         with logfire.span(
             "run_until_idle",
             iteration_count=self.run_state.iteration_count,
@@ -393,7 +386,8 @@ class BaseAgent(ABC):
             self.emit("turn_start", contents, self.run_state)
 
             while True:
-                response = self.client.models.generate_content(
+                # Use async client to avoid blocking the Shell app
+                response = await self.client.aio.models.generate_content(
                     model=self.model,
                     contents=self.get_contents(contents, self.run_state),
                     config=self.get_config(self.run_state),
@@ -487,105 +481,100 @@ class Agent(BaseAgent):
             run_state.increment_turn()
 
 
-def print_turn_start(_: list[ConversationItem], __: AgentRunState) -> None:
-    console.print()
-    console.print(Text("Assistant:", style="bold green"))
+# --- Shell Integration Classes ---
 
 
-def print_llm_response(message: types.Content, _: AgentRunState) -> None:
-    for part in message.parts or []:
-        if part.text:
-            render_text_response(part.text)
+class UIHooks:
+    """Handles routing agent hook events to the Textual shell UI."""
+
+    def __init__(self, shell: Shell):
+        self.shell = shell
+
+    def print_turn_start(self, _: list[ConversationItem], __: AgentRunState) -> None:
+        self.shell.print(Text("Assistant:", style="bold green"))
+
+    def print_llm_response(self, message: types.Content, _: AgentRunState) -> None:
+        for part in message.parts or []:
+            if part.text:
+                self.shell.print_markdown(part.text)
+
+    def print_llm_tool_call(
+        self, call: types.FunctionCall, run_state: AgentRunState
+    ) -> None:
+        if call.name == "modifyTodo" and call.args:
+            action = call.args.get("type", "add")
+            changed = call.args.get("todos", [])
+            self._render_todos(existing=run_state.todos, changed=changed, action=action)
+            return
+        self.shell.print(Text(f"  {format_tool_call(call)}", style="yellow"))
+
+    def _render_todos(
+        self, existing: list[str], changed: list[str], action: str
+    ) -> None:
+        self.shell.print(Text("  todos", style="bold cyan"))
+        if action == "remove":
+            changed_lower = {t.strip().lower() for t in changed}
+            for todo in existing:
+                if todo.lower() in changed_lower:
+                    continue
+                self.shell.print(Text(f"    [ ] {todo}", style="cyan"))
+            for todo in changed:
+                line = Text("    ", style="dim cyan")
+                line.append(f"[ ] {todo}", style="strike dim")
+                self.shell.print(line)
+        else:
+            for todo in existing:
+                self.shell.print(Text(f"    [ ] {todo}", style="cyan"))
+            for todo in changed:
+                self.shell.print(Text(f"  + [ ] {todo}", style="cyan"))
+
+    def print_llm_tool_result(
+        self, call: types.FunctionCall, result: ToolResult, _: AgentRunState
+    ) -> None:
+        if call.name == "modifyTodo":
+            return
+        if result.error:
+            self.shell.print(
+                Text(f"  {call.name} failed: {result.response}", style="bold red")
+            )
 
 
-def print_llm_tool_call(call: types.FunctionCall, _: AgentRunState) -> None:
-    if call.name == "modifyTodo":
-        return
-    console.print(Text(f"  {format_tool_call(call)}", style="yellow"))
-
-
-def print_llm_tool_result(
-    call: types.FunctionCall, result: ToolResult, _: AgentRunState
-) -> None:
-    if call.name == "modifyTodo":
-        render_todo_change(
-            action=result.response.get("action", "add"),
-            todo=result.response.get("todo", ""),
+class WorkshopApp:
+    def __init__(self):
+        self.shell = Shell()
+        self.agent = Agent(
+            tools=[ReadFile, Bash, ModifyTodo], run_state=AgentRunState()
         )
-        return
-    if result.error:
-        console.print(
-            Text(f"  {call.name} failed: {result.response}", style="bold red")
-        )
+        self.hooks = UIHooks(self.shell)
+        self.contents: list[types.Content] = []
+
+        self.agent.on("turn_start", self.hooks.print_turn_start)
+        self.agent.on("llm_response", self.hooks.print_llm_response)
+        self.agent.on("llm_tool_call", self.hooks.print_llm_tool_call)
+        self.agent.on("llm_tool_result", self.hooks.print_llm_tool_result)
+
+        def ensure_all_todos_completed(
+            _: types.Content, run_state: AgentRunState
+        ) -> bool:
+            return not run_state.todos
+
+        self.agent.on("verify_turn_complete", ensure_all_todos_completed)
+
+    async def on_submit(self, text: str) -> None:
+        self.shell.print(Text(f"* You: {text}", style="bold cyan"))
+        self.contents.append(types.UserContent(parts=[types.Part.from_text(text=text)]))
+
+        self.shell.set_loading(True)
+        try:
+            with logfire.span("agent_session_turn"):
+                await self.agent.run_until_idle(self.contents)
+        finally:
+            self.shell.set_loading(False)
+
+    def run(self):
+        self.shell.initialize(on_submit=self.on_submit)
+        self.shell.run()
 
 
-def ensure_all_todos_completed(_: types.Content, run_state: AgentRunState) -> bool:
-    return not run_state.todos
-
-
-agent = Agent(tools=[ReadFile, Bash, ModifyTodo], run_state=AgentRunState())
-agent.on("turn_start", print_turn_start)
-agent.on("llm_response", print_llm_response)
-agent.on("llm_tool_call", print_llm_tool_call)
-agent.on("llm_tool_result", print_llm_tool_result)
-agent.on("verify_turn_complete", ensure_all_todos_completed)
-
-contents = []
-with logfire.span("agent_session"):
-    while True:
-        console.print()
-        user_input = console.input("[bold cyan]You:[/bold cyan] ")
-        if user_input.strip().lower() == "quit":
-            console.print(Text("Exiting.", style="dim"))
-            break
-        contents.append(
-            types.UserContent(parts=[types.Part.from_text(text=user_input)])
-        )
-        agent.run_until_idle(contents)
-        console.print()
-
-
-class Runtime:
-    
-
-# class WorkshopApp:
-#     def __init__(self):
-#         self.shell = 
-#         self.agent = Agent(
-#             tools=[ReadFile, Bash, ModifyTodo], run_state=AgentRunState()
-#         )
-#         self.hooks = UIHooks(self.shell)
-#         self.contents: list[types.Content] = []
-
-#         self.agent.on("turn_start", self.hooks.print_turn_start)
-#         self.agent.on("llm_response", self.hooks.print_llm_response)
-#         self.agent.on("llm_tool_call", self.hooks.print_llm_tool_call)
-#         self.agent.on("llm_tool_result", self.hooks.print_llm_tool_result)
-
-#         def ensure_all_todos_completed(
-#             _: types.Content, run_state: AgentRunState
-#         ) -> bool:
-#             return not run_state.todos
-
-#         self.agent.on("verify_turn_complete", ensure_all_todos_completed)
-
-#     async def on_submit(self, text: str) -> None:
-#         # User input is now inline with a little *
-#         self.shell.print(Text(f"* Assistant: {text}", style="bold cyan"))
-#         self.contents.append(types.UserContent(parts=[types.Part.from_text(text=text)]))
-
-#         self.shell.print(Text(f"* You: {text}", style="bold cyan"))
-#         self.shell.set_loading(True)
-#         try:
-#             with logfire.span("agent_session_turn"):
-#                 await self.agent.run_until_idle(self.contents)
-#         finally:
-#             self.shell.set_loading(False)
-
-#     def run(self):
-#         self.shell.initialize(on_submit=self.on_submit)
-#         self.shell.run()
-
-
-# if __name__ == "__main__":
-#     WorkshopApp().run()
+if __name__ == "__main__":
+    WorkshopApp().run()
