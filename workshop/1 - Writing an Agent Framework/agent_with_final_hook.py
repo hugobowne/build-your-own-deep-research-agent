@@ -37,18 +37,30 @@ class AgentRunState:
     def should_disable_tools(self) -> bool:
         return self.hit_iteration_limit()
 
-    def add_todo(self, todo: str) -> None:
-        todo = todo.strip()
-        if todo and todo not in self.todos:
-            self.todos.append(todo)
+    def add_todos(self, todos: list[str]) -> list[str]:
+        added = []
+        for todo in todos:
+            todo = todo.strip()
+            if todo and todo not in self.todos:
+                self.todos.append(todo)
+                added.append(todo)
+        return added
 
-    def remove_todo(self, todo: str) -> bool:
-        todo = todo.strip().lower()
-        for existing in list(self.todos):
-            if existing.lower() == todo:
-                self.todos.remove(existing)
-                return True
-        return False
+    def remove_todos(self, todos: list[str]) -> tuple[list[str], list[str]]:
+        removed = []
+        not_found = []
+        for todo in todos:
+            todo_lower = todo.strip().lower()
+            found = False
+            for existing in list(self.todos):
+                if existing.lower() == todo_lower:
+                    self.todos.remove(existing)
+                    removed.append(existing)
+                    found = True
+                    break
+            if not found:
+                not_found.append(todo.strip())
+        return removed, not_found
 
 
 class ToolResult(BaseModel):
@@ -190,29 +202,29 @@ class Bash(AgentTool):
 
 class ModifyTodo(AgentTool):
     """
-    Add or remove a todo from the agent run state.
+    Add or remove todos from the agent run state. Supports multiple todos at once.
     """
 
     type: Literal["add", "remove"]
-    todo: str
+    todos: list[str]
 
     def execute(self, function_id: str, run_state: AgentRunState) -> ToolResult:
         if self.type == "add":
-            run_state.add_todo(self.todo)
+            added = run_state.add_todos(self.todos)
             return self.tool_result(
                 error=False,
                 function_id=function_id,
-                response={"action": "add", "todo": self.todo, "todos": run_state.todos},
+                response={"action": "add", "added": added, "todos": run_state.todos},
             )
 
-        removed = run_state.remove_todo(self.todo)
+        removed, not_found = run_state.remove_todos(self.todos)
         return self.tool_result(
-            error=not removed,
+            error=len(not_found) > 0,
             function_id=function_id,
             response={
                 "action": "remove",
-                "todo": self.todo,
                 "removed": removed,
+                "not_found": not_found,
                 "todos": run_state.todos,
             },
         )
@@ -243,7 +255,8 @@ def format_tool_call(call: types.FunctionCall) -> str:
     if call.name == "bash" and call.args and call.args.get("command"):
         return f"$ {call.args['command']}"
     if call.name == "modifyTodo" and call.args:
-        return f"Todo {call.args.get('type')}: {call.args.get('todo')}"
+        todos = call.args.get("todos", [])
+        return f"Todo {call.args.get('type')}: {', '.join(todos)}"
     return f"{call.name}: {call.args or {}}"
 
 
@@ -259,15 +272,23 @@ def render_text_response(text: str) -> None:
     console.print(Text(f"* {text}", style="white"))
 
 
-def render_todo_change(action: str, todo: str) -> None:
-    console.print(Text("  todos list", style="bold cyan"))
-    if action == "add":
-        console.print(Text(f"  + [ ] {todo}", style="cyan"))
-        return
-
-    line = Text("  - [ ] ", style="dim cyan")
-    line.append(todo, style="strike dim")
-    console.print(line)
+def render_todos(existing: list[str], changed: list[str], action: str) -> None:
+    console.print(Text("  todos", style="bold cyan"))
+    if action == "remove":
+        changed_lower = {t.strip().lower() for t in changed}
+        for todo in existing:
+            if todo.lower() in changed_lower:
+                continue
+            console.print(Text(f"    [ ] {todo}", style="cyan"))
+        for todo in changed:
+            line = Text("    ", style="dim cyan")
+            line.append(f"[ ] {todo}", style="strike dim")
+            console.print(line)
+    else:
+        for todo in existing:
+            console.print(Text(f"    [ ] {todo}", style="cyan"))
+        for todo in changed:
+            console.print(Text(f"  + [ ] {todo}", style="cyan"))
 
 
 def format_todos(todos: list[str]) -> str:
@@ -358,7 +379,10 @@ class BaseAgent(ABC):
         raise NotImplementedError
 
     def get_config(self, run_state: AgentRunState) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(tools=self.get_tools(run_state))
+        return types.GenerateContentConfig(
+            tools=self.get_tools(run_state),
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+        )
 
     def execute_tool(
         self, tool_name: str, args: dict[str, Any], function_id: str
@@ -494,8 +518,11 @@ def print_llm_response(message: types.Content, _: AgentRunState) -> None:
             render_text_response(part.text)
 
 
-def print_llm_tool_call(call: types.FunctionCall, _: AgentRunState) -> None:
-    if call.name == "modifyTodo":
+def print_llm_tool_call(call: types.FunctionCall, run_state: AgentRunState) -> None:
+    if call.name == "modifyTodo" and call.args:
+        action = call.args.get("type", "add")
+        changed = call.args.get("todos", [])
+        render_todos(existing=run_state.todos, changed=changed, action=action)
         return
     console.print(Text(f"  {format_tool_call(call)}", style="yellow"))
 
@@ -504,10 +531,6 @@ def print_llm_tool_result(
     call: types.FunctionCall, result: ToolResult, run_state: AgentRunState
 ) -> None:
     if call.name == "modifyTodo":
-        render_todo_change(
-            action=result.response.get("action", "add"),
-            todo=result.response.get("todo", ""),
-        )
         return
     if result.error:
         console.print(
