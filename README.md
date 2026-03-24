@@ -13,80 +13,52 @@ uv sync
 Environment variables:
 
 - `GOOGLE_API_KEY` — required for all workshops
-- `EXA_API_KEY` — required for workshops 3 and 4 (web search via Exa)
 
-## Testing
+## Workshop Progression
 
-Scripts are progressive within each workshop — start from the top and work down. Each script runs standalone with hardcoded mock data (no need to run earlier workshops first), except `end_to_end.py` which is interactive.
+Scripts are progressive within each section — start from the top and work down.
+
+### 1 - Writing an Agent Framework
+
+This section builds up an agent framework from scratch, one concept at a time.
+
+| # | File | What's introduced |
+|---|------|-------------------|
+| 1 | `genai_sdk.py` | Smallest possible Gemini SDK call with a manually-defined tool schema. No agent loop. |
+| 2 | `genai_sdk_telemetry.py` | Adds **Logfire telemetry** to the same SDK call. |
+| 3 | `single_turn_agent.py` | Introduces `AgentTool` / `ToolResult` Pydantic abstractions and a REPL loop. Tool execution is still inline (`if fc_name == "readFile"`). |
+| 4 | `agent.py` | Extracts an `Agent` class with a `run_until_idle` agentic loop, a tool registry, and **Rich** console rendering. |
+| 5 | `agent_with_hooks.py` | Adds an **event/hook system** (`on("turn_start", ...)`, `emit()`), decoupling rendering from the agent loop. |
+| 6 | `agent_with_state.py` | Introduces `AgentRunState` (iteration counting, tool disabling at limit), a `BaseAgent` ABC with `get_tools` / `get_contents` / `update_run_state`, and the **Bash** tool. |
+| 7 | `agent_with_final_hook.py` | Introduces **todos** — `todos: list[str]` on `AgentRunState`, the `ModifyTodo` tool, the `verify_turn_complete` hook, and the `ensure_all_todos_completed` guard. |
+| 8 | `final_agent.py` | Wraps `run_until_idle` in a **Logfire span** for tracing and adds a `quit` command. |
 
 ```bash
-# Workshop 1 — Generating our Research Plan
-uv run python3 "workshops/1 - Generating our Research Plan/response.py"
-uv run python3 "workshops/1 - Generating our Research Plan/tools.py"
-uv run python3 "workshops/1 - Generating our Research Plan/questions.py"          # interactive
-uv run python3 "workshops/1 - Generating our Research Plan/questions_with_plan.py" # interactive
-
-# Workshop 2 — Migrating to Textual
-uv run python3 "workshops/2 - migrating to Textual/shell.py"
-
-# Workshop 3 — Running sub-agents
-uv run python3 "workshops/3 - Running sub-agents/search.py"    # Exa only — check your API key works
-uv run python3 "workshops/3 - Running sub-agents/subagent.py"  # single sub-agent (Gemini + Exa)
-uv run python3 "workshops/3 - Running sub-agents/fan_out.py"   # 3 sub-agents in parallel
-
-# Workshop 4 — Synthesizing the report
-uv run python3 "workshops/4 - Synthesizing the report/synthesize.py"   # Gemini only, uses mock results
-uv run python3 "workshops/4 - Synthesizing the report/end_to_end.py"   # full interactive pipeline
+uv run python3 "workshop/1 - Writing an Agent Framework/genai_sdk.py"
+uv run python3 "workshop/1 - Writing an Agent Framework/single_turn_agent.py"    # interactive
+uv run python3 "workshop/1 - Writing an Agent Framework/agent.py"                # interactive
+uv run python3 "workshop/1 - Writing an Agent Framework/agent_with_hooks.py"     # interactive
+uv run python3 "workshop/1 - Writing an Agent Framework/agent_with_state.py"     # interactive
+uv run python3 "workshop/1 - Writing an Agent Framework/agent_with_final_hook.py" # interactive
+uv run python3 "workshop/1 - Writing an Agent Framework/final_agent.py"          # interactive
 ```
 
-## 1 - Generating our Research Plan
+### 2 - Creating a Plan
 
-This section is about turning a vague research idea into a scoped research plan.
+This section takes the final agent from section 1, makes it **async**, and migrates the UI to a **Textual Shell**.
 
-Rough shape:
+| File | What's introduced |
+|------|-------------------|
+| `shell.py` | A reusable Textual `Shell` wrapper — persistent input box, scrolling transcript, loading spinner, and an `await shell.input()` API for interactive follow-ups. |
+| `agent.py` | The section 1 agent adapted for Textual: `run_until_idle` becomes `async` (uses `client.aio.models.generate_content`), rendering is routed through a `UIHooks` class, and everything is wired together in `WorkshopApp`. |
 
-- `response.py`: the smallest possible Interactions API example
-- `tools.py`: a single tool-calling example with `clarifyScope`
-- `questions.py`: a clarification loop that gathers missing information and outputs a research brief
-- `questions_with_plan.py`: takes that research brief and turns it into a user-facing response plus a todo list
-
-## 2 - migrating to Textual
-
-This section is about moving the agent UI to Textual.
-
-Rough shape:
-
-- a persistent input box at the bottom of the screen
-- a transcript area above it
-- a reusable shell foundation for wiring in the queue and agent runtime
-
-Archived:
-
-- `workshops/archive/2 - Creating our minimal agent`: the plain terminal prototype with the in-memory steer / queue behavior
-
-## 3 - Running sub-agents
-
-This section fans out research to parallel sub-agents, each using Exa web search as a Gemini tool.
-
-Requires `EXA_API_KEY` environment variable (in addition to `GOOGLE_API_KEY`).
-
-Rough shape:
-
-- `search.py`: the smallest possible Exa search call — proof the dependency works
-- `subagent.py`: a single sub-agent that takes a todo item, searches the web via tool calls, and returns a markdown summary
-- `fan_out.py`: runs multiple sub-agents in parallel using `ThreadPoolExecutor` and collects results
-
-## 4 - Synthesizing the report
-
-This section takes sub-agent results and produces a final cohesive research report.
-
-Rough shape:
-
-- `synthesize.py`: takes the original request + sub-agent results and asks Gemini to produce a structured markdown report
-- `end_to_end.py`: wires the full pipeline together — clarification → plan → sub-agents → report
+```bash
+uv run python3 "workshop/2 - Creating a Plan/shell.py"   # shell demo
+uv run python3 "workshop/2 - Creating a Plan/agent.py"    # interactive agent with Textual UI
+```
 
 ## Notes
 
-- These scripts use the experimental Gemini Interactions API via `google-genai`.
+- These scripts use the Gemini Interactions API via `google-genai`.
 - Rich is used for terminal formatting, including markdown rendering.
 - The examples are intentionally simple and optimized for workshop/demo use rather than production robustness.
