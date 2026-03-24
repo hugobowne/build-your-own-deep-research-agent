@@ -54,12 +54,12 @@ class AgentRuntime:
 
     def prepare_request(
         self, contents: list[types.Content]
-    ) -> tuple[types.GenerateContentConfig, list[types.Content], list[types.Tool]]:
+    ) -> tuple[types.GenerateContentConfig, list[types.Content]]:
         tools = []
         if self.state.iteration_count < self.config.max_iterations:
             tools = [tool.to_genai_tool() for tool in self.tools.values()]
         config = types.GenerateContentConfig(tools=tools)
-        return config, list(contents), tools
+        return config, list(contents)
 
     async def emit(self, hook_type: HookType, **kwargs: Any) -> None:
         for hook in self.hooks[hook_type]:
@@ -136,10 +136,12 @@ async def main() -> None:
         if not user_input:
             continue
 
-        contents.append(types.UserContent(parts=[types.Part.from_text(text=user_input)]))
+        contents.append(
+            types.UserContent(parts=[types.Part.from_text(text=user_input)])
+        )
         while True:
             state.iteration_count += 1
-            request_config, request_contents, _ = runtime.prepare_request(contents)
+            request_config, request_contents = runtime.prepare_request(contents)
 
             completion = await client.aio.models.generate_content(
                 model=config.model,
