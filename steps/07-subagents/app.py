@@ -42,7 +42,7 @@ async def run_search_subagent(
 ) -> dict[str, str]:
     child_agent = Agent(
         client=Client(),
-        config=RunConfig(max_iterations=2),
+        config=RunConfig(max_iterations=4),
         state=RunState(),
         context=AgentContext(
             exa=exa,
@@ -76,7 +76,9 @@ async def run_search_subagent(
         context.live.update(render_subagent_table(context.subagent_statuses))
 
     final_message = await child_agent.run_until_idle(child_contents)
-    final_text = "\n".join(part.text for part in final_message.parts if part.text).strip()
+    final_text = "\n".join(
+        part.text for part in final_message.parts if part.text
+    ).strip()
     context.subagent_statuses[query] = final_text[:100] or "Done"
     if context.live is not None:
         context.live.update(render_subagent_table(context.subagent_statuses))
@@ -89,7 +91,9 @@ async def run_search_subagents(
     context: AgentContext,
 ) -> list[dict[str, str]]:
     context.subagent_statuses = {query: "Queued" for query in queries}
-    with Live(render_subagent_table(context.subagent_statuses), refresh_per_second=8) as live:
+    with Live(
+        render_subagent_table(context.subagent_statuses), refresh_per_second=8
+    ) as live:
         context.live = live
         tasks = [
             asyncio.create_task(run_search_subagent(exa, query, context))
@@ -133,7 +137,9 @@ async def main() -> None:
         if not user_input:
             continue
 
-        contents.append(types.UserContent(parts=[types.Part.from_text(text=user_input)]))
+        contents.append(
+            types.UserContent(parts=[types.Part.from_text(text=user_input)])
+        )
         await agent.run_until_idle(contents)
 
 
