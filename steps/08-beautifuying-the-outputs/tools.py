@@ -1,3 +1,4 @@
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, TypeAlias, TypeVar
@@ -10,6 +11,7 @@ from state import AgentContext, RunState
 
 ArgsT = TypeVar("ArgsT", bound=BaseModel)
 MAX_DELEGATED_QUERIES = 3
+TODAY = datetime.now().strftime("%d %B %Y")
 
 
 @dataclass(slots=True)
@@ -34,7 +36,6 @@ class SearchWebMetadata:
 class DelegateSearchMetadata:
     queries: list[str]
     results: list[dict[str, str]]
-    query_answers_xml: str
 
 
 ToolMetadata: TypeAlias = (
@@ -175,9 +176,9 @@ async def search_web(
 
     results = exa.search(
         args.query,
-        num_results=5,
+        num_results=10,
         type="auto",
-        contents={"highlights": {"max_characters": 2000}},
+        contents={"highlights": {"max_characters": 4000}},
     )
 
     formatted_results: list[str] = []
@@ -309,6 +310,7 @@ DELEGATE_SEARCH_TOOL = Tool(
 
 PARENT_SYSTEM_INSTRUCTION = """
 You are a coding agent.
+Today's date is {today}.
 Use todos to track progress.
 You must add todos before you do anything.
 Make sure you check off all todos before you end.
@@ -317,14 +319,15 @@ When the user asks for web research or current information, use delegate_search.
 Pass 1 to 3 distinct search queries.
 Only include multiple queries when they cover meaningfully different questions.
 If one search query is enough, pass exactly one.
-""".strip()
+""".strip().format(today=TODAY)
 
 SEARCH_SUBAGENT_SYSTEM_INSTRUCTION = """
 You are a focused web research subagent.
+Today's date is {today}.
 Answer the user's query in natural language.
 Cite sources inline using markdown links.
 Use the search_web tool when needed.
 Do not ask follow-up questions.
 
 Cast a wide net, look for information that's relevant and then filter out what's relevant. you should make sure that you do at least 2 searches
-""".strip()
+""".strip().format(today=TODAY)

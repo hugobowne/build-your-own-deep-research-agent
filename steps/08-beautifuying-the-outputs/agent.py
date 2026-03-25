@@ -2,17 +2,12 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable, Literal, TypeAlias
 
 from google.genai import Client, types
+from pydantic import ValidationError
 from rich import print
+from rich.markdown import Markdown
 
 from state import AgentContext, RunConfig, RunState
-from tools import (
-    DelegateSearchMetadata,
-    ModifyTodoMetadata,
-    ReadFileMetadata,
-    SearchWebMetadata,
-    Tool,
-    ToolExecutionResult,
-)
+from tools import ReadFileMetadata, Tool, ToolExecutionResult
 
 
 MessageHook: TypeAlias = Callable[
@@ -81,10 +76,40 @@ class Agent:
     async def execute_tool_call(self, call: types.FunctionCall) -> dict[str, Any]:
         tool = self.tools.get(call.name)
         if tool is None:
-            raise RuntimeError(f"Unknown tool: {call.name}")
+            execution_result = ToolExecutionResult(
+                model_response={"error": f"Unknown tool: {call.name}"}
+            )
+            return {
+                "name": call.name,
+                "execution_result": execution_result,
+                "response": execution_result.model_response,
+            }
         if call.args is None:
-            raise RuntimeError(f"Tool call '{call.name}' did not include arguments.")
-        args = tool.args_model.model_validate(call.args)
+            execution_result = ToolExecutionResult(
+                model_response={
+                    "error": f"Tool call '{call.name}' did not include arguments."
+                }
+            )
+            return {
+                "name": call.name,
+                "execution_result": execution_result,
+                "response": execution_result.model_response,
+            }
+        try:
+            args = tool.args_model.model_validate(call.args)
+        except ValidationError as error:
+            execution_result = ToolExecutionResult(
+                model_response={
+                    "error": (
+                        f"Invalid arguments for tool '{call.name}':\n{error}"
+                    )
+                }
+            )
+            return {
+                "name": call.name,
+                "execution_result": execution_result,
+                "response": execution_result.model_response,
+            }
         execution_result = await tool.handler(args, self.state, self.context)
         return {
             "name": call.name,
@@ -184,7 +209,8 @@ async def render_message(
 ) -> None:
     for part in message.parts:
         if part.text:
-            print(f"\nAssistant:\n{part.text}")
+            print()
+            print(Markdown(part.text))
 
 
 async def render_tool_call(
@@ -193,8 +219,7 @@ async def render_tool_call(
     state: RunState,
     context: AgentContext,
 ) -> None:
-    print(f"\nTool Call: {call.name}")
-    print(call.args)
+    return
 
 
 async def render_tool_result(
@@ -204,33 +229,16 @@ async def render_tool_result(
     state: RunState,
     context: AgentContext,
 ) -> None:
-    print("\nTool Result:")
-    metadata = result.metadata
-    if isinstance(metadata, SearchWebMetadata):
-        print(f"Query: {metadata.query}")
-        print(f"Results: {len(metadata.raw_results.results)}")
-        top_titles = [
-            item.title or item.url for item in metadata.raw_results.results[:3]
-        ]
-        if top_titles:
-            print("Top titles:")
-            for title in top_titles:
-                print(f"- {title}")
-        return
-    if isinstance(metadata, DelegateSearchMetadata):
-        print(f"Delegated queries: {len(metadata.queries)}")
-        for query in metadata.queries:
-            print(f"- {query}")
-        print(f"Answers returned: {len(metadata.results)}")
-        return
-    if isinstance(metadata, ReadFileMetadata):
-        print(f"Path: {metadata.path}")
-        print(metadata.contents)
-        return
-    if isinstance(metadata, ModifyTodoMetadata):
-        print(f"{metadata.action.title()} todos:")
-        for todo in metadata.todos:
-            print(f"- {todo}")
+    error = result.model_response.get("error")
+    if error:
+        print()
+        print(f"[red]Tool error ({call.name}):[/red]")
+        print(Markdown(f"```text\n{error}\n```"))
         return
 
-    print(result.model_response)
+    metadata = result.metadata
+    if isinstance(metadata, ReadFileMetadata):
+        print()
+        print(f"Read file: {metadata.path}")
+        print(Markdown(f"```text\n{metadata.contents}\n```"))
+    return

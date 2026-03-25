@@ -10,101 +10,76 @@ The progression lives in [steps](/Users/ivanleo/Documents/coding/build-your-own-
 
 ### `01-minimal-call`
 
-The smallest possible Gemini call with a manually declared tool schema.
+Accomplish:
 
-Teach:
+- make the smallest possible Gemini call
+- declare a tool schema manually
+- inspect what a model-emitted function call actually looks like
 
-- how tool declarations are exposed to the model
-- what a function call looks like in the model response
-
-Do not introduce runtime abstractions yet.
+This step is intentionally bare. The point is to see the raw API shape before adding any runtime abstractions.
 
 ### `02-single-tool`
 
-Add one real tool handler and manually round-trip the function call back to the model.
+Accomplish:
 
-Teach:
+- implement one real tool handler
+- execute the tool after the model calls it
+- send the function response back to the model
 
-- how to execute one tool
-- how to send a function response back
-
-Keep this intentionally direct, but avoid defensive fallback patterns like `fc.args or {}`. Validate required arguments explicitly and fail if they are missing.
+By the end of this step, you have a full manual tool round-trip with no shared runtime yet.
 
 ### `03-tool-runtime`
 
-Extract the repeated tool execution path into a tiny runtime.
+Accomplish:
 
-Teach:
+- extract a reusable `Tool` definition
+- validate typed tool args at the runtime boundary
+- stop hand-wiring every tool execution path
 
-- a shared `Tool` definition
-- typed arg validation at the runtime boundary
-- plain handler functions
-
-This is where we stop hand-wiring each tool call.
+This is the first real runtime step: the code starts to become reusable without getting abstract for abstraction's sake.
 
 ### `04-run-state-and-context`
 
-Introduce:
+Accomplish:
 
-- `RunConfig`
-- `RunState`
-- `AgentContext`
-
-Teach:
-
-- the difference between config, mutable state, and dependencies
-- why things like `max_iterations` belong in config
-- why clients like Exa/db belong in context
+- separate static configuration from mutable run state
+- separate runtime dependencies from both
+- introduce `RunConfig`, `RunState`, and `AgentContext`
+- make concepts like iteration limits, todos, and clients live in the right place
 
 ### `05-hooks`
 
-Introduce the hook lifecycle:
+Accomplish:
 
-- `before_model`
-- `after_model`
-- `after_tools`
+- add explicit extension points for rendering and observation
+- introduce `prepare_request()`, `message`, `llm_tool_call`, and `tool_result`
+- keep request shaping visible through `prepare_request()`
+- avoid turning the runtime loop into a giant conditional renderer
 
-Teach:
+### `06-creating-an-agent`
 
-- how hooks let us extend behavior incrementally
-- how to keep the core loop readable
+Accomplish:
 
-Keep hooks small and explicit. Do not let them turn into a hidden framework.
+- wrap the runtime in an `Agent` class
+- add a `run_until_idle()` loop that keeps going until tool use is finished
+- move from one-off scripts to a reusable agent abstraction
 
-### `06-rendering-with-hooks`
+### `07-subagents`
 
-Add rendering through hooks with a generic `shell.write(...)` and updateable blocks.
+Accomplish:
 
-Teach:
+- delegate focused work to child agents
+- give each subagent its own bounded run config and state
+- let the parent aggregate subagent results
+- show live progress for concurrent delegated queries
 
-- how rendering can stay flexible without introducing a reducer
-- when to append output vs update a persistent block
-- how hooks are a clean place to drive rendering
+### `08-prompt-builder`
 
-This is where status blocks, tool render output, and live subagent panels start to appear.
+Accomplish:
 
-### `07-prompt-builder`
-
-Move prompt construction into one place.
-
-Teach:
-
-- prompt composition as a first-class concern
-- mode/todo injection without scattering prompt text around
-- how this can later be swapped to Jinja templates without changing the runtime shape
-
-### `08-subagents`
-
-Add subagents with their own:
-
-- `RunConfig`
-- `RunState`
-- iteration budget
-
-Teach:
-
-- how a parent agent can dispatch a bounded child agent
-- how shell live blocks can track subagent progress
+- move prompt construction into one place
+- compose prompts from reusable parts instead of scattering strings around
+- make later upgrades like templating possible without changing the runtime shape
 
 ## Rules For These Steps
 
