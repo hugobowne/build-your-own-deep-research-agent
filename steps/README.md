@@ -81,17 +81,7 @@ Teach:
 
 This is where status blocks, tool render output, and live subagent panels start to appear.
 
-### `07-prompt-builder`
-
-Move prompt construction into one place.
-
-Teach:
-
-- prompt composition as a first-class concern
-- mode/todo injection without scattering prompt text around
-- how this can later be swapped to Jinja templates without changing the runtime shape
-
-### `08-subagents`
+### `07-subagents`
 
 Add subagents with their own:
 
@@ -103,6 +93,36 @@ Teach:
 
 - how a parent agent can dispatch a bounded child agent
 - how shell live blocks can track subagent progress
+
+### `08-beautifying-the-outputs`
+
+Improve the shell output and tool rendering.
+
+Teach:
+
+- how to render assistant output more cleanly
+- how to surface tool errors without dumping raw objects
+- how richer output can stay isolated from the core agent runtime
+
+### `09-generating-a-plan`
+
+Add an explicit planning phase before execution.
+
+Teach:
+
+- how run state can track a current `mode`
+- how tool availability can change based on that mode
+- how a `generate_plan` tool can transition the run from planning into execution
+
+### `10-adding-open-telemetry`
+
+Add Logfire-backed OpenTelemetry spans around the agent loop.
+
+Teach:
+
+- how to keep the default Google GenAI instrumentation
+- how to add explicit parent spans for a user turn, model iteration, tool call, and subagent
+- how to attach run config and mutable state like iteration count and todos to each span
 
 ## Rules For These Steps
 
@@ -122,5 +142,6 @@ By the later steps, we should have:
 - explicit config/state/context boundaries
 - flexible rendering through hooks
 - support for bounded subagents
+- OpenTelemetry traces that show how a turn progressed
 
 without losing the incremental workshop feel.

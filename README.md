@@ -16,7 +16,8 @@ steps/
 ├── 06-creating-an-agent     → agent.py, tools.py, state.py
 ├── 07-subagents             → agent.py, tools.py, state.py, app.py
 ├── 08-beautifying-the-outputs → agent.py, tools.py, state.py, app.py
-└── 09-generating-a-plan     → agent.py, tools.py, state.py, app.py
+├── 09-generating-a-plan     → agent.py, tools.py, state.py, app.py
+└── 10-adding-open-telemetry → agent.py, tools.py, state.py, app.py
 ```
 
 1. **`01-minimal-call`** — Make the smallest possible Gemini call with a hand-written tool schema. See what a `FunctionCall` looks like. Never actually execute the tool.
@@ -28,14 +29,15 @@ steps/
 7. **`07-subagents`** — Spawn child `Agent` instances with their own config, state, and iteration budget. Dispatch search queries concurrently. Add `app.py` as the new entrypoint.
 8. **`08-beautifying-the-outputs`** — Richer tool result rendering (syntax-highlighted file reads, formatted errors, bash exit codes). Runtime unchanged — all work is in hook callbacks.
 9. **`09-generating-a-plan`** — Add a `mode` field (`"plan"` / `"execute"`) to `RunState`. Plan mode offers only `generate_plan`; calling it seeds todos and switches to execute mode with the full tool set.
+10. **`10-adding-open-telemetry`** — Instrument the agent with Logfire and OpenTelemetry. Add a named turn span per agent run, attach the model request metadata directly to that span, and use smaller `tool_call` / `tool_executed` spans for each tool plus delegated-search subagent spans.
 
-See [`report.md`](report.md) for a sample output from the step 09 agent.
+See [`report.md`](./airpods_report.md) for a sample output from the step 10 agent and the [trace here on logfire](https://logfire-us.pydantic.dev/public-trace/eb9a4dec-edd0-439e-941e-0ce43dcc8c48?spanId=47d016809c9b61f0)
 
 ## Running a step
 
 ```bash
-cd steps/09-generating-a-plan
+cd steps/10-adding-open-telemetry
 python app.py  # or agent.py for earlier steps
 ```
 
-Requires a `GEMINI_API_KEY` environment variable. Later steps also use `EXA_API_KEY` for web search.
+Requires a `GEMINI_API_KEY` environment variable. Later steps also use `EXA_API_KEY` for web search. To send traces to Logfire, set `LOGFIRE_TOKEN`; otherwise the step still runs but won’t export spans remotely.
